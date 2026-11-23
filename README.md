@@ -39,6 +39,7 @@ backend/
       daily.py         Daily random events from OpenStreetMap POIs (Overpass)
       jobs.py          Nightly tick: expire missions, streak reset, slacker stars
       storage.py       Proof photos: EXIF stripped, S3 signed URLs
+  scripts/setup_db.py  One-time local DB setup: user, database, PostGIS
   tests/               Rule unit tests + end-to-end API tests (real PostGIS)
 frontend/
   src/app/
@@ -48,41 +49,105 @@ frontend/
 docker-compose.yml     PostGIS + API
 ```
 
-## Run it locally
+## Local setup (no Docker)
 
-**1. Database + API (Docker)**
+You need:
+
+- **PostgreSQL 14+** with the **PostGIS** extension (spatial queries)
+- **Python 3.12+**
+- **Node.js 20+** (22 recommended)
+
+### 1. Make sure PostGIS is installed
+
+PostGIS is an add-on for PostgreSQL and is often not installed with it.
+
+| OS | How |
+|---|---|
+| Windows | Open **Application Stack Builder** (installed with PostgreSQL) → choose your server → *Spatial Extensions* → **PostGIS 3.x** → install |
+| macOS | `brew install postgis` (Postgres.app already includes it) |
+| Ubuntu/Debian | `sudo apt install postgresql-16-postgis-3` (match your PostgreSQL version) |
+
+The setup script in step 3 tells you if PostGIS is still missing.
+
+### 2. Clone and install the backend
 
 ```bash
-docker compose up --build
-# API on http://localhost:8000  (Swagger docs at /docs)
+git clone https://github.com/shambu-1/mission-map.git
+cd mission-map/backend
+
+python -m venv .venv
+# Windows (PowerShell):  .venv\Scripts\Activate.ps1
+# macOS / Linux:         source .venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
-Or without Docker for the API (needs PostgreSQL with PostGIS running):
+### 3. Create the database (one time)
 
 ```bash
-cd backend
-cp .env.example .env          # edit DATABASE_URL / JWT_SECRET
-pip install -r requirements.txt
+python scripts/setup_db.py
+```
+
+It asks for the password of your `postgres` admin user (the one you chose when installing PostgreSQL), then:
+
+- creates the user `missionmap` (password `missionmap`)
+- creates the database `missionmap`
+- enables PostGIS in it
+
+It's safe to run again. Options: `--admin-user`, `--host`, `--port` (default `postgres@localhost:5432`).
+
+### 4. Configure (optional)
+
+The defaults already point at `postgresql+asyncpg://missionmap:missionmap@localhost:5432/missionmap`, so this works with no config. To change anything (port, password, JWT secret, S3 for photos):
+
+```bash
+cp .env.example .env        # Windows: copy .env.example .env
+```
+
+### 5. Start the API
+
+```bash
 uvicorn app.main:app --reload
 ```
 
-Tables are created on startup. There are no migrations yet, so after changing a model in development, drop and recreate the database (add Alembic before real users).
+- API: http://localhost:8000 — interactive docs at http://localhost:8000/docs
+- Tables are created automatically on first start.
 
-**2. Frontend**
+### 6. Start the frontend (new terminal)
 
 ```bash
-cd frontend
+cd mission-map/frontend
 npm install
-npm start                      # http://localhost:4200, /api is proxied to :8000
+npm start
 ```
 
-Geolocation needs `localhost` or HTTPS. To test on your phone, serve over HTTPS (for example `ng serve --host 0.0.0.0 --ssl`) or deploy.
+Open **http://localhost:4200**, create a player and allow location access. Requests to `/api` are proxied to the API on port 8000 (`proxy.conf.json`).
 
-**3. Tests**
+### 7. Run the tests (optional)
 
 ```bash
 cd backend
-pytest -q     # API tests need DATABASE_URL pointing at a PostGIS database
+pytest -q
+```
+
+The API tests use the same `missionmap` database.
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `PostGIS isn't enabled in the database` on API start | Install PostGIS (step 1), then run `python scripts/setup_db.py` again |
+| `Can't reach PostgreSQL` | Start the PostgreSQL service; check the port in `.env` |
+| `password authentication failed` | Run the setup script again, or fix `DATABASE_URL` in `backend/.env` |
+| Changed a model and get column errors | No migrations yet: drop and recreate the DB — `DROP DATABASE missionmap;` as `postgres`, then `python scripts/setup_db.py` |
+| Map shows no location | Geolocation needs `localhost` or HTTPS, and the browser must be allowed to use location |
+| Testing on your phone | Run `npx ng serve --host 0.0.0.0 --ssl` and open `https://<your-laptop-ip>:4200` (accept the certificate warning) |
+
+## Run with Docker (alternative)
+
+```bash
+docker compose up --build        # PostGIS + API on http://localhost:8000
+cd frontend && npm install && npm start
 ```
 
 ## Becoming an admin
