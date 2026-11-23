@@ -6,7 +6,6 @@ from app.deps import CurrentUser, Db
 from app.models import CheckinAttempt, Completion, ExploredCell, Mission
 from app.schemas import MeOut, MeUpdate, StatsOut
 from app.services import progression, storage
-from app.services.geo import latlng_of
 from app.services.missions import active_slots_used
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -149,14 +148,13 @@ async def heatmap(user: CurrentUser, db: Db):
     """Personal heatmap: completed mission points as GeoJSON."""
     rows = (
         await db.execute(
-            select(Completion.location, Completion.completed_at).where(
-                Completion.user_id == user.id, Completion.location.is_not(None)
+            select(Completion.lat, Completion.lng, Completion.completed_at).where(
+                Completion.user_id == user.id, Completion.lat.is_not(None)
             )
         )
     ).all()
     features = []
-    for loc, at in rows:
-        lat, lng = latlng_of(loc)
+    for lat, lng, at in rows:
         features.append(
             {"type": "Feature", "geometry": {"type": "Point", "coordinates": [lng, lat]}, "properties": {"at": at.isoformat()}}
         )

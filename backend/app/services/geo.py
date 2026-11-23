@@ -1,22 +1,14 @@
+"""Plain-Python geography helpers. No database extension needed: distances use the
+haversine formula (well under 1 m error at mission distances), and "near me" searches
+use an indexed latitude/longitude bounding box first, then exact haversine."""
+
 import math
 from urllib.parse import quote
 
-from geoalchemy2.shape import to_shape
-
 EARTH_RADIUS_M = 6_371_000
+METERS_PER_DEG_LAT = 111_320
 
 TRAVEL_MODES = ("driving", "walking", "two-wheeler", "transit")
-
-
-def point_wkt(lat: float, lng: float) -> str:
-    return f"SRID=4326;POINT({lng} {lat})"
-
-
-def latlng_of(geog) -> tuple[float, float] | None:
-    if geog is None:
-        return None
-    p = to_shape(geog)
-    return p.y, p.x
 
 
 def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -49,3 +41,11 @@ def parse_bbox(bbox: str) -> tuple[float, float, float, float]:
     if not (valid_latlng(min_lat, min_lng) and valid_latlng(max_lat, max_lng)):
         raise ValueError("bbox out of range")
     return min_lng, min_lat, max_lng, max_lat
+
+
+def bbox_around(lat: float, lng: float, radius_m: float) -> tuple[float, float, float, float]:
+    """Bounding box (min_lat, max_lat, min_lng, max_lng) that contains a circle — for indexed prefiltering."""
+    dlat = radius_m / METERS_PER_DEG_LAT
+    cos_lat = max(math.cos(math.radians(lat)), 0.01)
+    dlng = min(180.0, radius_m / (METERS_PER_DEG_LAT * cos_lat))
+    return lat - dlat, lat + dlat, lng - dlng, lng + dlng

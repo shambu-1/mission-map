@@ -1,7 +1,7 @@
 from datetime import date, datetime
 
-from geoalchemy2 import Geography
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Date, DateTime, Float, ForeignKey, Index, Integer, String, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -24,7 +24,12 @@ class District(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
-    boundary = mapped_column(Geography("POLYGON", srid=4326, spatial_index=True))
+    boundary: Mapped[dict] = mapped_column(JSONB)  # GeoJSON Polygon, [lng, lat] order
+    # Bounding box for indexed prefiltering; the exact test is done with Shapely
+    min_lat: Mapped[float] = mapped_column(Float, index=True)
+    max_lat: Mapped[float] = mapped_column(Float)
+    min_lng: Mapped[float] = mapped_column(Float)
+    max_lng: Mapped[float] = mapped_column(Float)
 
 
 class DistrictClaim(Base):
@@ -56,7 +61,11 @@ class RestrictedZone(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     kind: Mapped[str] = mapped_column(String(32))
     name: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    area = mapped_column(Geography("GEOMETRY", srid=4326, spatial_index=True))
+    area: Mapped[dict] = mapped_column(JSONB)  # any GeoJSON geometry
+    min_lat: Mapped[float] = mapped_column(Float, index=True)
+    max_lat: Mapped[float] = mapped_column(Float)
+    min_lng: Mapped[float] = mapped_column(Float)
+    max_lng: Mapped[float] = mapped_column(Float)
 
 
 class Poi(Base):
@@ -68,7 +77,11 @@ class Poi(Base):
     osm_id: Mapped[int] = mapped_column(BigInteger, unique=True)
     name: Mapped[str] = mapped_column(String(255))
     kind: Mapped[str] = mapped_column(String(32))  # park / library / lake / viewpoint / ...
-    location = mapped_column(Geography("POINT", srid=4326, spatial_index=True))
+    lat: Mapped[float] = mapped_column(Float)
+    lng: Mapped[float] = mapped_column(Float)
+
+
+Index("pois_lat_lng_idx", Poi.lat, Poi.lng)
 
 
 class JobRun(Base):

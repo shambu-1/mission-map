@@ -160,3 +160,26 @@ def test_sanitize_points():
     # A previous point far away makes the batch's first point impossible
     last = ExplorePoint(9.49, 76.33, now - timedelta(minutes=10))
     assert sanitize_points(pts[:1], last, now) == []
+
+
+# ---------- geometry without PostGIS ----------
+def test_bbox_around_contains_circle():
+    from app.services.geo import bbox_around, haversine_m
+
+    min_lat, max_lat, min_lng, max_lng = bbox_around(12.97, 77.59, 2000)
+    assert haversine_m(12.97, 77.59, max_lat, 77.59) == pytest.approx(2000, rel=0.01)
+    assert haversine_m(12.97, 77.59, 12.97, max_lng) == pytest.approx(2000, rel=0.01)
+    assert min_lat < 12.97 < max_lat and min_lng < 77.59 < max_lng
+
+
+def test_parse_geometry():
+    from app.services.areas import AreaError, bbox_columns, parse_geometry
+
+    sq = {"type": "Polygon", "coordinates": [[[77.5, 12.9], [77.6, 12.9], [77.6, 13.0], [77.5, 13.0], [77.5, 12.9]]]}
+    assert bbox_columns(parse_geometry(sq, polygon_only=True)) == {"min_lng": 77.5, "min_lat": 12.9, "max_lng": 77.6, "max_lat": 13.0}
+    with pytest.raises(AreaError):
+        parse_geometry({"type": "LineString", "coordinates": [[77.5, 12.9], [77.6, 13.0]]}, polygon_only=True)
+    with pytest.raises(AreaError):
+        parse_geometry({"type": "Point", "coordinates": [500, 12.9]})
+    with pytest.raises(AreaError):
+        parse_geometry({"type": "Nope"})

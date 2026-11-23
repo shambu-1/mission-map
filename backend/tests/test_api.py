@@ -359,3 +359,37 @@ async def test_slots(client):
     assert (await client.post(f"{API}/missions", headers=h, json={"title": "too many", "type": "home"})).status_code == 409
     r = await client.post(f"{API}/stories", headers=h, json={"title": "Get fit", "chapters": [{"title": "Gym"}]})
     assert r.status_code == 403  # main story locked at level 1
+
+
+# ---------------- plain PostgreSQL: polygons with Shapely, radius search ----------------
+async def test_districts_zones_and_radius_without_postgis(client):
+    admin, ha, _ = await register(client)
+    await sql("UPDATE users SET is_admin = true WHERE username = :u", u=admin)
+    poly = {"type": "Polygon", "coordinates": [[[77.58, 12.96], [77.61, 12.96], [77.61, 12.99], [77.58, 12.99], [77.58, 12.96]]]}
+    r = await client.post(f"{API}/admin/districts", headers=ha, json={"name": "Shivajinagar", "geometry": poly})
+    assert r.status_code == 201
+    bad = {"type": "Polygon", "coordinates": [[[77.58, 12.96], [77.61, 12.99], [77.61, 12.96], [77.58, 12.99], [77.58, 12.96]]]}
+    assert (await client.post(f"{API}/admin/districts", headers=ha, json={"name": "Bowtie", "geometry": bad})).status_code == 422
+
+    lake = {"type": "Polygon", "coordinates": [[[77.70, 12.90], [77.71, 12.90], [77.71, 12.91], [77.70, 12.91], [77.70, 12.90]]]}
+    assert (await client.post(f"{API}/admin/restricted-zones", headers=ha, json={"name": "Lake", "kind": "water", "geometry": lake})).status_code == 201
+
+    _, h, _ = await register(client)
+    r = await client.post(f"{API}/missions", headers=h, json={"title": "swim", "lat": 12.905, "lng": 77.705})
+    assert r.status_code == 422 and "water" in r.json()["detail"]
+    ok = await create(client, h, title="next to the lake", lat=12.915, lng=77.705)
+
+    fc = (await client.get(f"{API}/districts?bbox=77.5,12.9,77.7,13.0", headers=h)).json()
+    assert [f["properties"]["name"] for f in fc["features"]] == ["Shivajinagar"]
+    assert fc["features"][0]["geometry"]["type"] == "Polygon"
+
+    # A completion inside the district counts towards claiming it
+    m = await create(client, h, title="in district", lat=12.975, lng=77.595)
+    await open_checkin(m["id"])
+    assert (await checkin(client, h, m["id"], 12.975, 77.595))["status"] == "completed"
+    claim = (await client.get(f"{API}/districts?bbox=77.5,12.9,77.7,13.0", headers=h)).json()["features"][0]["properties"]
+    assert claim["missions_done"] == 1
+
+    # Radius search: exact distance, sorted, outside radius excluded
+    near = (await client.get(f"{API}/missions?lat=12.915&lng=77.70&radius=2000", headers=h)).json()
+    assert [x["id"] for x in near] == [ok["id"]] and 500 < near[0]["distance_m"] < 600

@@ -20,26 +20,32 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 
 
 async def init_db() -> None:
-    """Create the PostGIS extension and all tables (MVP: no migrations yet)."""
+    """Create all tables (MVP: no migrations yet). Plain PostgreSQL — no extensions needed."""
     from app import models  # noqa: F401  (register models)
 
     try:
         async with engine.begin() as conn:
-            has_postgis = await conn.scalar(text("SELECT 1 FROM pg_extension WHERE extname = 'postgis'"))
-            if not has_postgis:
-                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
             await conn.run_sync(Base.metadata.create_all)
+            # Tables from an older version aren't altered by create_all — detect and explain.
+            stale = await conn.scalar(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'missions' AND column_name = 'location'"
+                )
+            )
+        if stale:
+            raise RuntimeError(
+                "The database was created by an older version of the app (PostGIS columns). "
+                "Recreate it with `python scripts/setup_db.py --reset` (deletes its data)."
+            )
     except OSError as exc:
         raise RuntimeError(
             f"Can't reach PostgreSQL ({exc}). Is it running? Check DATABASE_URL in backend/.env."
         ) from exc
+    except RuntimeError:
+        raise
     except Exception as exc:
         msg = str(exc)
-        if "postgis" in msg.lower() or "geography" in msg.lower():
-            raise RuntimeError(
-                "PostGIS isn't enabled in the database. Run `python scripts/setup_db.py` from the "
-                "backend folder (see README → Local setup)."
-            ) from exc
         if "password authentication failed" in msg or "does not exist" in msg:
             raise RuntimeError(
                 f"Database login failed ({msg.splitlines()[0]}). Run `python scripts/setup_db.py` "

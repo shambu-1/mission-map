@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import CheckinAttempt, Completion, Mission
-from app.services.geo import haversine_m, latlng_of
+from app.services.geo import haversine_m
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -47,17 +47,19 @@ def start_of_local_day(now: datetime) -> datetime:
 async def last_known_position(db: AsyncSession, user_id: int, within_min: int = 30) -> tuple[float, float] | None:
     """Most recent server-side position (accepted check-in) in the last `within_min` minutes."""
     since = datetime.now(timezone.utc) - timedelta(minutes=within_min)
-    loc = await db.scalar(
-        select(CheckinAttempt.location)
-        .where(
-            CheckinAttempt.user_id == user_id,
-            CheckinAttempt.created_at >= since,
-            CheckinAttempt.location.is_not(None),
+    row = (
+        await db.execute(
+            select(CheckinAttempt.lat, CheckinAttempt.lng)
+            .where(
+                CheckinAttempt.user_id == user_id,
+                CheckinAttempt.created_at >= since,
+                CheckinAttempt.lat.is_not(None),
+            )
+            .order_by(CheckinAttempt.created_at.desc())
+            .limit(1)
         )
-        .order_by(CheckinAttempt.created_at.desc())
-        .limit(1)
-    )
-    return latlng_of(loc) if loc is not None else None
+    ).first()
+    return (row[0], row[1]) if row else None
 
 
 async def too_close_to_player(

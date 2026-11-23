@@ -1,10 +1,9 @@
 """Daily events, fog of war, districts."""
 
-import json
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 
 from app.config import settings
@@ -23,6 +22,7 @@ from app.services.fog import (
     new_cells_today,
     sanitize_points,
 )
+from app.services.areas import overlaps_bbox
 from app.services.geo import parse_bbox
 from app.services.missions import to_out
 
@@ -106,14 +106,14 @@ async def districts(user: CurrentUser, db: Db, bbox: str = Query(...)):
         min_lng, min_lat, max_lng, max_lat = parse_bbox(bbox)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    envelope = func.ST_MakeEnvelope(min_lng, min_lat, max_lng, max_lat, 4326)
     rows = (
         await db.execute(
-            select(District, func.ST_AsGeoJSON(District.boundary), DistrictClaim)
+            select(District, DistrictClaim)
             .outerjoin(
                 DistrictClaim, (DistrictClaim.district_id == District.id) & (DistrictClaim.user_id == user.id)
             )
-            .where(func.ST_Intersects(District.boundary, func.geography(envelope)))
+            .where(overlaps_bbox(District, min_lng, min_lat, max_lng, max_lat))
+            .limit(500)
         )
     ).all()
     return {
@@ -121,7 +121,7 @@ async def districts(user: CurrentUser, db: Db, bbox: str = Query(...)):
         "features": [
             {
                 "type": "Feature",
-                "geometry": json.loads(geojson),
+                "geometry": d.boundary,
                 "properties": {
                     "id": d.id,
                     "name": d.name,
@@ -130,6 +130,6 @@ async def districts(user: CurrentUser, db: Db, bbox: str = Query(...)):
                     "needed": 10,
                 },
             }
-            for d, geojson, claim in rows
+            for d, claim in rows
         ],
     }

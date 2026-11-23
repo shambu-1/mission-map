@@ -1,10 +1,12 @@
-"""One-time local database setup for Mission Map (no Docker).
+"""One-time local database setup for Mission Map (no Docker, no extensions).
 
-Creates the `missionmap` user and database on your local PostgreSQL and enables PostGIS.
+Creates the `missionmap` user and database on your local PostgreSQL. Works with a plain
+PostgreSQL install — PostGIS is NOT needed.
 
 Usage (from the backend folder, with the virtualenv active):
     python scripts/setup_db.py
     python scripts/setup_db.py --admin-user postgres --host localhost --port 5432
+    python scripts/setup_db.py --reset      # drop and recreate the database (deletes its data)
 
 You'll be asked for the password of your PostgreSQL admin user (the one you set when
 installing PostgreSQL). Safe to run more than once.
@@ -22,15 +24,6 @@ APP_USER = "missionmap"
 APP_PASSWORD = "missionmap"
 APP_DB = "missionmap"
 
-POSTGIS_HELP = """
-PostGIS is not installed for this PostgreSQL server. Install it, then run this script again:
-
-  Windows : open "Application Stack Builder" (installed with PostgreSQL) →
-            pick your PostgreSQL 16 server → Spatial Extensions → PostGIS 3.x → install.
-  macOS   : brew install postgis        (Postgres.app already includes PostGIS)
-  Ubuntu  : sudo apt install postgresql-16-postgis-3   (match your PostgreSQL version)
-"""
-
 
 async def main(args: argparse.Namespace) -> int:
     password = args.admin_password or os.environ.get("PGPASSWORD") or getpass.getpass(
@@ -46,35 +39,32 @@ async def main(args: argparse.Namespace) -> int:
         return 1
 
     try:
+        version = await admin.fetchval("SHOW server_version")
+        print(f"• PostgreSQL {version.split()[0]}")
+
         if not await admin.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", APP_USER):
             await admin.execute(f"CREATE ROLE {APP_USER} LOGIN PASSWORD '{APP_PASSWORD}'")
             print(f"✓ Created user '{APP_USER}'")
         else:
             print(f"• User '{APP_USER}' already exists")
 
-        if not await admin.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", APP_DB):
+        exists = await admin.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", APP_DB)
+        if exists and args.reset:
+            await admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+                APP_DB,
+            )
+            await admin.execute(f"DROP DATABASE {APP_DB}")
+            print(f"✓ Dropped database '{APP_DB}'")
+            exists = False
+        if not exists:
             await admin.execute(f"CREATE DATABASE {APP_DB} OWNER {APP_USER}")
             print(f"✓ Created database '{APP_DB}'")
         else:
-            print(f"• Database '{APP_DB}' already exists")
-
-        available = await admin.fetchval("SELECT 1 FROM pg_available_extensions WHERE name = 'postgis'")
+            print(f"• Database '{APP_DB}' already exists (use --reset to recreate it)")
     finally:
         await admin.close()
 
-    if not available:
-        print(POSTGIS_HELP)
-        return 1
-
-    # Enable PostGIS inside the app database (needs the admin/superuser).
-    db = await asyncpg.connect(database=APP_DB, **common)
-    try:
-        await db.execute("CREATE EXTENSION IF NOT EXISTS postgis")
-        version = await db.fetchval("SELECT postgis_version()")
-        await db.execute(f"GRANT ALL ON SCHEMA public TO {APP_USER}")
-    finally:
-        await db.close()
-    print(f"✓ PostGIS enabled ({version.split()[0]})")
     print("\nAll set. Start the API with:  uvicorn app.main:app --reload")
     return 0
 
@@ -85,4 +75,5 @@ if __name__ == "__main__":
     parser.add_argument("--admin-password", default=None, help="or set PGPASSWORD, or type it when asked")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=5432)
+    parser.add_argument("--reset", action="store_true", help="drop and recreate the database (deletes all its data)")
     sys.exit(asyncio.run(main(parser.parse_args())))

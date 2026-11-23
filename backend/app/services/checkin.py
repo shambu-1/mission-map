@@ -2,14 +2,14 @@
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import CheckinAttempt, CoopCheckin, Mission, SquadMember, User
 from app.schemas import CheckinIn, CheckinOut
 from app.services import anticheat, farming, rewards
-from app.services.geo import point_wkt
+from app.services.geo import haversine_m
 
 # "I'm here" fallback (weak GPS + photo proof): still has to be close to the place
 MANUAL_MAX_DISTANCE_M = 300
@@ -24,7 +24,8 @@ async def _log(db, mission, user, body: CheckinIn, result: str, reason: str | No
         CheckinAttempt(
             mission_id=mission.id,
             user_id=user.id,
-            location=point_wkt(body.lat, body.lng) if body.lat is not None else None,
+            lat=body.lat,
+            lng=body.lng,
             accuracy_m=body.accuracy_m,
             speed_mps=speed_mps,
             result=result,
@@ -80,7 +81,7 @@ async def checkin(db: AsyncSession, mission: Mission, user: User, body: CheckinI
         return _reject(f"Check-in opens in {minutes} min — new missions need a short wait")
 
     # Home missions: no location, self-confirmed
-    if mission.location is None:
+    if mission.lat is None or mission.lng is None:
         if mission.proof_required and not mission.proof_key:
             return _reject("Upload proof first")
         return await _complete(db, mission, user, CheckinIn(), now)
@@ -113,11 +114,7 @@ async def checkin(db: AsyncSession, mission: Mission, user: User, body: CheckinI
         await _log(db, mission, user, body, "rejected", "moving too fast", speed / 3.6)
         return _reject("Looks like you're moving fast — don't play while driving")
 
-    distance = await db.scalar(
-        select(func.ST_Distance(Mission.location, func.ST_GeogFromText(point_wkt(body.lat, body.lng)))).where(
-            Mission.id == mission.id
-        )
-    )
+    distance = haversine_m(mission.lat, mission.lng, body.lat, body.lng)
 
     # Manual "I'm here" fallback when GPS is weak: replaces only the GPS-accuracy check.
     # It needs a photo, must be within MANUAL_MAX_DISTANCE_M, and still runs dwell time.

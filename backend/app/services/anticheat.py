@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import CheckinAttempt
-from app.services.geo import haversine_m, latlng_of
+from app.services.geo import haversine_m
 
 
 @dataclass
@@ -57,9 +57,8 @@ async def recent_points(db: AsyncSession, user_id: int, limit: int = 5) -> list[
     ).scalars().all()
     points = []
     for r in rows:
-        ll = latlng_of(r.location)
-        if ll:
-            points.append(PrevPoint(ll[0], ll[1], r.created_at, r.accuracy_m))
+        if r.lat is not None and r.lng is not None:
+            points.append(PrevPoint(r.lat, r.lng, r.created_at, r.accuracy_m))
     return points
 
 

@@ -14,7 +14,7 @@ Design doc: [Mission Map — Technical Design Document](https://claude.ai/artifa
 | Map | MapLibre GL JS with OpenStreetMap data (OpenFreeMap vector styles, OSM raster fallback) |
 | UI | Tailwind CSS 4 + daisyUI 5 (custom dark HUD theme) |
 | Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), Pydantic 2 |
-| Database | PostgreSQL 16 + PostGIS, h3 for fog of war |
+| Database | Plain PostgreSQL 14+ (no extensions) — Shapely for polygons, h3 for fog of war |
 | Storage | S3-compatible bucket for proof photos (local disk in dev) |
 
 All game rules (check-in, XP, unlocks, anti-cheat) run on the server.
@@ -30,44 +30,40 @@ backend/
                        districts, district_claims, unlocks, friendships, squads, sponsors, ...
     routers/           auth, me, missions, stories, world (daily/explore/map/districts), social, admin
     services/
-      checkin.py       Geofence check-in: accuracy, distance (PostGIS), dwell, proof, co-op, friend verify
+      checkin.py       Geofence check-in: accuracy, distance (haversine), dwell, proof, co-op, friend verify
       progression.py   XP formula, levels (100 × L^1.5), unlock table, streaks, slacker stars
       rewards.py       Completion: XP, cash, stats, streak, story chapters, district claims, sponsor billing
       anticheat.py     Impossible travel, suspicious accuracy, rate limit, flag → XP freeze
       maps_link.py     Google Maps link import (full + short links, SSRF allow-list)
       fog.py           H3 res-9 fog of war
+      geo.py           Haversine distance, bounding boxes, Google Maps links
+      areas.py         Districts and restricted zones: GeoJSON in JSONB + Shapely point-in-polygon
+      farming.py       Anti-farming rules (distance, wait, daily caps, cooldowns)
       daily.py         Daily random events from OpenStreetMap POIs (Overpass)
       jobs.py          Nightly tick: expire missions, streak reset, slacker stars
       storage.py       Proof photos: EXIF stripped, S3 signed URLs
-  scripts/setup_db.py  One-time local DB setup: user, database, PostGIS
-  tests/               Rule unit tests + end-to-end API tests (real PostGIS)
+  scripts/setup_db.py  One-time local DB setup: user + database (--reset to recreate)
+  tests/               Rule unit tests + end-to-end API tests (real PostgreSQL)
 frontend/
   src/app/
     core/              API client, auth (JWT + rotating refresh), GPS/location service, models
     pages/             map, mission form, missions, stories, social (crew), profile (stats/shop)
     shared/            HUD, mission sheet, place picker, "Mission passed" overlay
-docker-compose.yml     PostGIS + API
+docker-compose.yml     PostgreSQL + API
 ```
 
 ## Local setup (no Docker)
 
 You need:
 
-- **PostgreSQL 14+** with the **PostGIS** extension (spatial queries)
+- **PostgreSQL 14+** — a plain install is enough, no extensions (PostGIS is **not** needed)
 - **Python 3.12+**
 - **Node.js 20+** (22 recommended)
 
-### 1. Make sure PostGIS is installed
+### 1. Check PostgreSQL is running
 
-PostGIS is an add-on for PostgreSQL and is often not installed with it.
-
-| OS | How |
-|---|---|
-| Windows | Open **Application Stack Builder** (installed with PostgreSQL) → choose your server → *Spatial Extensions* → **PostGIS 3.x** → install |
-| macOS | `brew install postgis` (Postgres.app already includes it) |
-| Ubuntu/Debian | `sudo apt install postgresql-16-postgis-3` (match your PostgreSQL version) |
-
-The setup script in step 3 tells you if PostGIS is still missing.
+You should know the password of the `postgres` admin user (set when you installed PostgreSQL).
+On Windows it runs as the service *postgresql-x64-16*; on macOS `brew services start postgresql@16`; on Linux `sudo systemctl start postgresql`.
 
 ### 2. Clone and install the backend
 
@@ -92,9 +88,8 @@ It asks for the password of your `postgres` admin user (the one you chose when i
 
 - creates the user `missionmap` (password `missionmap`)
 - creates the database `missionmap`
-- enables PostGIS in it
 
-It's safe to run again. Options: `--admin-user`, `--host`, `--port` (default `postgres@localhost:5432`).
+It's safe to run again. Options: `--admin-user`, `--host`, `--port` (default `postgres@localhost:5432`), and `--reset` to drop and recreate the database (deletes its data).
 
 ### 4. Configure (optional)
 
@@ -136,17 +131,17 @@ The API tests use the same `missionmap` database.
 
 | Problem | Fix |
 |---|---|
-| `PostGIS isn't enabled in the database` on API start | Install PostGIS (step 1), then run `python scripts/setup_db.py` again |
+| `The database was created by an older version of the app` | Run `python scripts/setup_db.py --reset` (recreates the DB; dev data is lost) |
 | `Can't reach PostgreSQL` | Start the PostgreSQL service; check the port in `.env` |
 | `password authentication failed` | Run the setup script again, or fix `DATABASE_URL` in `backend/.env` |
-| Changed a model and get column errors | No migrations yet: drop and recreate the DB — `DROP DATABASE missionmap;` as `postgres`, then `python scripts/setup_db.py` |
+| Pulled a change and get column / table errors | No migrations yet: `python scripts/setup_db.py --reset` |
 | Map shows no location | Geolocation needs `localhost` or HTTPS, and the browser must be allowed to use location |
 | Testing on your phone | Run `npx ng serve --host 0.0.0.0 --ssl` and open `https://<your-laptop-ip>:4200` (accept the certificate warning) |
 
 ## Run with Docker (alternative)
 
 ```bash
-docker compose up --build        # PostGIS + API on http://localhost:8000
+docker compose up --build        # PostgreSQL + API on http://localhost:8000
 cd frontend && npm install && npm start
 ```
 
@@ -167,6 +162,17 @@ curl -X POST localhost:8000/api/v1/admin/districts -H "Authorization: Bearer $TO
 ```
 
 Restricted zones (railway tracks, military areas, water bodies) use `/admin/restricted-zones` with `kind` and any GeoJSON geometry. Missions can't be placed inside them.
+
+## How location works without PostGIS
+
+| Need | How |
+|---|---|
+| Distance, geofence check-in | Haversine formula in Python (error well under 1 m at these distances) |
+| Missions near me / daily-event places | Indexed `lat`/`lng` bounding-box filter in SQL, then exact haversine distance and sort |
+| Districts, restricted zones | GeoJSON stored in a `JSONB` column with its bounding box; SQL prefilters by box, Shapely tests point-in-polygon |
+| Fog of war | H3 hexagon IDs (`h3` library) stored as text |
+
+Coordinates are WGS84 (`lat`, `lng`); GeoJSON uses `[lng, lat]` order. If you later move to a host with PostGIS, these can switch back to spatial columns without changing the API.
 
 ## What's implemented (by design-doc phase)
 
@@ -235,10 +241,10 @@ Capped completions still complete the mission (and keep your streak) but give no
 
 - Capacitor Android/iOS wrapper (needed for `isFromMockProvider` mock-location checks and push notifications)
 - Payments for Premium and sponsor billing (counts are tracked; no payment provider is wired up)
-- Alembic migrations (after pulling a change that adds tables or columns, recreate the dev database — see Troubleshooting)
+- Alembic migrations (after pulling a change that adds tables or columns, run `python scripts/setup_db.py --reset`)
 - Seeding districts from real ward boundaries and restricted zones from OSM (admin endpoints accept GeoJSON)
 - PWA icons are the Angular defaults
 
 ## Deploy (free tiers)
 
-Backend on Render / Fly.io / Cloud Run (Dockerfile in `backend/`), database on Neon or Supabase (enable PostGIS), frontend on Vercel / Netlify (`npx ng build`, output in `frontend/dist/frontend/browser`). Serve the API under the same origin at `/api` or change `frontend/src/app/core/api.ts`.
+Backend on Render / Fly.io / Cloud Run (Dockerfile in `backend/`), database on any PostgreSQL (Neon, Supabase, RDS…), frontend on Vercel / Netlify (`npx ng build`, output in `frontend/dist/frontend/browser`). Serve the API under the same origin at `/api` or change `frontend/src/app/core/api.ts`.

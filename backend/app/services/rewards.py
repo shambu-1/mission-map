@@ -4,13 +4,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Completion, District, DistrictClaim, Mission, Sponsor, Story, User
+from app.models import Completion, DistrictClaim, Mission, Sponsor, Story, User
 from app.services import farming, progression
 from app.services.fog import cell_of, mark_explored
-from app.services.geo import point_wkt
+from app.services.areas import district_at
 
 DISTRICT_CLAIM_THRESHOLD = 10
 IST = ZoneInfo("Asia/Kolkata")  # streak days follow the local calendar
@@ -108,7 +108,8 @@ async def complete_mission(
         Completion(
             mission_id=mission.id,
             user_id=user.id,
-            location=point_wkt(lat, lng) if lat is not None else None,
+            lat=lat,
+            lng=lng,
             accuracy_m=accuracy_m,
             h3_index=cell,
             proof_url=mission.proof_key,
@@ -164,9 +165,7 @@ async def finish_mission_state(db: AsyncSession, mission: Mission, now: datetime
 
 
 async def _progress_district(db: AsyncSession, user_id: int, lat: float, lng: float, now: datetime) -> str | None:
-    district = await db.scalar(
-        select(District).where(func.ST_Covers(District.boundary, func.ST_GeogFromText(point_wkt(lat, lng))))
-    )
+    district = await district_at(db, lat, lng)
     if district is None:
         return None
     claim = await db.get(DistrictClaim, (user_id, district.id))

@@ -1,6 +1,5 @@
 """Admin: public-mission review, anti-cheat review, sponsors, districts and restricted zones (Phase 4)."""
 
-import json
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -12,12 +11,8 @@ from app.deps import Db, require_admin
 from app.models import CheckinAttempt, District, Mission, MissionReport, RestrictedZone, Sponsor, User
 from app.schemas import MissionOut, SponsoredMissionIn, SponsorIn
 from app.services import storage
-from app.services.geo import point_wkt
+from app.services.areas import AreaError, bbox_columns, parse_geometry
 from app.services.missions import ensure_safe_location, to_out
-
-def geojson_to_geog(geometry: dict):
-    return func.geography(func.ST_SetSRID(func.ST_GeomFromGeoJSON(json.dumps(geometry)), 4326))
-
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 uploads = APIRouter(tags=["uploads"])
@@ -112,7 +107,8 @@ async def sponsored_mission(sponsor_id: int, body: SponsoredMissionIn, db: Db, a
         description=body.description,
         type="timed" if body.deadline else "side",
         category="explore",
-        location=point_wkt(body.lat, body.lng),
+        lat=body.lat,
+        lng=body.lng,
         place_name=body.place_name,
         radius_m=body.radius_m,
         deadline=body.deadline,
@@ -130,9 +126,12 @@ async def sponsored_mission(sponsor_id: int, body: SponsoredMissionIn, db: Db, a
 
 @router.post("/districts", status_code=201)
 async def add_district(body: GeoJsonAreaIn, db: Db, admin: User = Depends(require_admin)):
-    if body.geometry.get("type") != "Polygon":
-        raise HTTPException(422, "District must be a GeoJSON Polygon")
-    d = District(name=body.name, boundary=geojson_to_geog(body.geometry))
+    """GeoJSON Polygon ([lng, lat] order), e.g. a ward boundary."""
+    try:
+        geom = parse_geometry(body.geometry, polygon_only=True)
+    except AreaError as exc:
+        raise HTTPException(422, str(exc))
+    d = District(name=body.name, boundary=body.geometry, **bbox_columns(geom))
     db.add(d)
     await db.commit()
     return {"id": d.id, "name": d.name}
@@ -140,7 +139,12 @@ async def add_district(body: GeoJsonAreaIn, db: Db, admin: User = Depends(requir
 
 @router.post("/restricted-zones", status_code=201)
 async def add_zone(body: GeoJsonAreaIn, db: Db, admin: User = Depends(require_admin)):
-    z = RestrictedZone(kind=body.kind, name=body.name, area=geojson_to_geog(body.geometry))
+    """Any GeoJSON geometry (railway line buffer, military area, lake polygon...)."""
+    try:
+        geom = parse_geometry(body.geometry)
+    except AreaError as exc:
+        raise HTTPException(422, str(exc))
+    z = RestrictedZone(kind=body.kind, name=body.name, area=body.geometry, **bbox_columns(geom))
     db.add(z)
     await db.commit()
     return {"id": z.id}

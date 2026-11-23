@@ -6,14 +6,14 @@ from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import ExploredCell, Mission, Poi, User
 from app.services.fog import cell_of
-from app.services.geo import latlng_of, point_wkt
+from app.services.geo import bbox_around, haversine_m
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ async def fetch_pois_from_osm(db: AsyncSession, lat: float, lng: float, radius_m
         p_lat = el.get("lat") or el.get("center", {}).get("lat")
         p_lng = el.get("lon") or el.get("center", {}).get("lon")
         if kind and p_lat and p_lng and tags.get("name"):
-            rows.append({"osm_id": el["id"], "name": tags["name"][:255], "kind": kind, "location": point_wkt(p_lat, p_lng)})
+            rows.append({"osm_id": el["id"], "name": tags["name"][:255], "kind": kind, "lat": p_lat, "lng": p_lng})
     if rows:
         await db.execute(insert(Poi).values(rows).on_conflict_do_nothing(index_elements=["osm_id"]))
     return len(rows)
@@ -99,12 +99,16 @@ async def generate_daily(db: AsyncSession, user: User, lat: float, lng: float, c
     if existing:
         return list(existing)
 
-    here = func.ST_GeogFromText(point_wkt(lat, lng))
-    nearby_q = select(Poi).where(func.ST_DWithin(Poi.location, here, settings.daily_radius_m))
-    pois = (await db.execute(nearby_q.limit(300))).scalars().all()
+    min_lat, max_lat, min_lng, max_lng = bbox_around(lat, lng, settings.daily_radius_m)
+    nearby_q = select(Poi).where(Poi.lat.between(min_lat, max_lat), Poi.lng.between(min_lng, max_lng)).limit(500)
+
+    def within_radius(rows):
+        return [p for p in rows if haversine_m(lat, lng, p.lat, p.lng) <= settings.daily_radius_m]
+
+    pois = within_radius((await db.execute(nearby_q)).scalars().all())
     if len(pois) < count:
         await fetch_pois_from_osm(db, lat, lng, settings.daily_radius_m)
-        pois = (await db.execute(nearby_q.limit(300))).scalars().all()
+        pois = within_radius((await db.execute(nearby_q)).scalars().all())
     if not pois:
         return []
 
@@ -114,7 +118,7 @@ async def generate_daily(db: AsyncSession, user: User, lat: float, lng: float, c
     want = weakest_category(user)
 
     def score(p: Poi) -> float:
-        p_lat, p_lng = latlng_of(p.location)
+        p_lat, p_lng = p.lat, p.lng
         unexplored = 2 if cell_of(p_lat, p_lng) not in explored else 0
         matches = 1 if _template_for(p.kind)[0] == want else 0
         return unexplored + matches + random.random()
@@ -123,14 +127,15 @@ async def generate_daily(db: AsyncSession, user: User, lat: float, lng: float, c
     missions = []
     for p in picked:
         category, template = _template_for(p.kind)
-        p_lat, p_lng = latlng_of(p.location)
+        p_lat, p_lng = p.lat, p.lng
         m = Mission(
             owner_id=user.id,
             title=template.format(name=p.name)[:120],
             description=f"Daily random event — expires at midnight. Boosts your {category} stat.",
             type="daily",
             category=category,
-            location=point_wkt(p_lat, p_lng),
+            lat=p_lat,
+            lng=p_lng,
             place_name=p.name,
             radius_m=100,
             deadline=deadline,

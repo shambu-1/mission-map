@@ -21,14 +21,14 @@ from app.schemas import (
 )
 from app.services import checkin as checkin_service
 from app.services import farming, progression, rewards, storage
-from app.services.geo import point_wkt
+from app.services.geo import haversine_m
 from app.services.maps_link import LinkError, parse_maps_link
 from app.services.missions import (
     ACTIVE_STATUSES,
-    distance_expr,
     ensure_free_slot,
     ensure_safe_location,
     to_out,
+    within_bbox,
 )
 
 router = APIRouter(prefix="/missions", tags=["missions"])
@@ -126,7 +126,8 @@ def build_mission(owner_id: int, body: MissionIn, **extra) -> Mission:
         description=body.description,
         type=body.type,
         category=body.category,
-        location=point_wkt(body.lat, body.lng) if body.lat is not None else None,
+        lat=body.lat,
+        lng=body.lng,
         place_name=body.place_name,
         radius_m=body.radius_m,
         dwell_min=body.dwell_min,
@@ -171,17 +172,19 @@ async def list_missions(
     )
     q = select(Mission).where(visible, Mission.status.in_(statuses))
     if lat is not None and lng is not None:
-        dist = distance_expr(lat, lng)
-        here = select(Mission, dist.label("d")).where(
+        # Indexed bounding-box prefilter in SQL, then exact distance + sort in Python
+        here = select(Mission).where(
             visible,
             Mission.status.in_(statuses),
-            or_(
-                Mission.location.is_(None),
-                func.ST_DWithin(Mission.location, func.ST_GeogFromText(point_wkt(lat, lng)), radius),
-            ),
-        ).order_by(dist.nulls_last())
-        rows = (await db.execute(here)).all()
-        return [to_out(m, user, d) for m, d in rows]
+            or_(Mission.lat.is_(None), within_bbox(lat, lng, radius)),
+        )
+        found = []
+        for m in (await db.execute(here)).scalars():
+            d = haversine_m(lat, lng, m.lat, m.lng) if m.lat is not None else None
+            if d is None or d <= radius:
+                found.append((m, d))
+        found.sort(key=lambda md: (md[1] is None, md[1] or 0))
+        return [to_out(m, user, d) for m, d in found]
     rows = (await db.execute(q.order_by(Mission.created_at.desc()))).scalars().all()
     return [to_out(m, user) for m in rows]
 
@@ -261,7 +264,7 @@ async def update_mission(mission_id: int, body: MissionUpdate, user: CurrentUser
             raise HTTPException(422, "Home missions have no location")
         await ensure_safe_location(db, lat, lng)
         await ensure_not_at_feet(db, user.id, lat, lng, data.pop("origin_lat", None), data.pop("origin_lng", None))
-        m.location = point_wkt(lat, lng)
+        m.lat, m.lng = lat, lng
         m.activated_at = now_utc()  # moving a mission restarts the check-in wait
         m.dwell_started_at = None
     data.pop("origin_lat", None)
@@ -380,7 +383,8 @@ async def take_public(mission_id: int, user: CurrentUser, db: Db):
         description=src.description,
         type="side" if src.type in ("main", "daily") else src.type,
         category=src.category,
-        location=src.location,
+        lat=src.lat,
+        lng=src.lng,
         place_name=src.place_name,
         radius_m=src.radius_m,
         dwell_min=src.dwell_min,

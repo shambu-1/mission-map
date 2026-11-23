@@ -1,7 +1,6 @@
 from datetime import datetime
 
-from geoalchemy2 import Geography
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -36,8 +35,9 @@ class Mission(Base):
     type: Mapped[str] = mapped_column(String(8), default="side")
     category: Mapped[str] = mapped_column(String(16), default="explore")
 
-    # Home missions have no location
-    location = mapped_column(Geography("POINT", srid=4326, spatial_index=True), nullable=True)
+    # Home missions have no location. Plain lat/lng (WGS84) — indexed for bounding-box searches.
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     place_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     radius_m: Mapped[int] = mapped_column(Integer, default=100)
     dwell_min: Mapped[int] = mapped_column(Integer, default=0)
@@ -79,6 +79,9 @@ class Mission(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+Index("missions_lat_lng_idx", Mission.lat, Mission.lng)
+
+
 class Completion(Base):
     """One row per successful check-in."""
 
@@ -87,7 +90,8 @@ class Completion(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    location = mapped_column(Geography("POINT", srid=4326, spatial_index=True), nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     h3_index: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     proof_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -105,7 +109,8 @@ class CheckinAttempt(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    location = mapped_column(Geography("POINT", srid=4326), nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     speed_mps: Mapped[float | None] = mapped_column(Float, nullable=True)
     result: Mapped[str] = mapped_column(String(16))  # accepted / in_progress / rejected / flagged

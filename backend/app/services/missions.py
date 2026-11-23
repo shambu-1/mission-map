@@ -4,17 +4,17 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Mission, RestrictedZone, User
+from app.models import Mission, User
 from app.schemas import MissionOut
 from app.services import farming, progression
-from app.services.geo import latlng_of, point_wkt, view_url, waypoint_url
+from app.services.areas import restricted_zone_at
+from app.services.geo import bbox_around, view_url, waypoint_url
 
 ACTIVE_STATUSES = ("active", "in_progress")
 
 
 def to_out(m: Mission, user: User | None = None, distance_m: float | None = None) -> MissionOut:
-    ll = latlng_of(m.location)
-    lat, lng = (ll if ll else (None, None))
+    lat, lng = m.lat, m.lng
     mode = user.travel_mode if user else "driving"
     return MissionOut(
         id=m.id,
@@ -72,14 +72,12 @@ async def ensure_free_slot(db: AsyncSession, user: User) -> None:
 
 async def ensure_safe_location(db: AsyncSession, lat: float, lng: float) -> None:
     """Block missions inside restricted zones (railway tracks, military areas, water bodies)."""
-    zone = await db.scalar(
-        select(RestrictedZone.kind).where(
-            func.ST_Intersects(RestrictedZone.area, func.ST_GeogFromText(point_wkt(lat, lng)))
-        ).limit(1)
-    )
+    zone = await restricted_zone_at(db, lat, lng)
     if zone:
-        raise HTTPException(422, f"Missions can't be placed in a restricted area ({zone})")
+        raise HTTPException(422, f"Missions can't be placed in a restricted area ({zone.kind})")
 
 
-def distance_expr(lat: float, lng: float):
-    return func.ST_Distance(Mission.location, func.ST_GeogFromText(point_wkt(lat, lng)))
+def within_bbox(lat: float, lng: float, radius_m: float):
+    """SQL condition: mission lies in the bounding box of a circle (indexed prefilter)."""
+    min_lat, max_lat, min_lng, max_lng = bbox_around(lat, lng, radius_m)
+    return Mission.lat.between(min_lat, max_lat) & Mission.lng.between(min_lng, max_lng)

@@ -8,7 +8,7 @@ from app.deps import CurrentUser, Db, require_unlock
 from app.models import Mission, Story, User
 from app.routers.missions import ensure_not_at_feet
 from app.schemas import StoryIn, StoryOut
-from app.services.geo import haversine_m, point_wkt
+from app.services.geo import haversine_m
 from app.services.missions import ensure_free_slot, ensure_safe_location, to_out
 
 router = APIRouter(prefix="/stories", tags=["stories"])
@@ -57,7 +57,8 @@ async def create_story(
                 description=ch.description,
                 type="main",
                 category=ch.category,
-                location=point_wkt(ch.lat, ch.lng) if ch.lat is not None else None,
+                lat=ch.lat,
+                lng=ch.lng,
                 place_name=ch.place_name,
                 radius_m=ch.radius_m,
                 dwell_min=ch.dwell_min,
