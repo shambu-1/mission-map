@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from geoalchemy2 import Geography
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -69,3 +69,14 @@ class Poi(Base):
     name: Mapped[str] = mapped_column(String(255))
     kind: Mapped[str] = mapped_column(String(32))  # park / library / lake / viewpoint / ...
     location = mapped_column(Geography("POINT", srid=4326, spatial_index=True))
+
+
+class JobRun(Base):
+    """One row per (job, day). Inserting the row claims the run, so restarts and
+    multiple API instances never run the nightly job twice for the same day."""
+
+    __tablename__ = "job_runs"
+
+    job: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    ran_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

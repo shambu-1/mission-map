@@ -5,11 +5,11 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.config import settings
 from app.deps import Db, require_admin
-from app.models import CheckinAttempt, District, Mission, RestrictedZone, Sponsor, User
+from app.models import CheckinAttempt, District, Mission, MissionReport, RestrictedZone, Sponsor, User
 from app.schemas import MissionOut, SponsoredMissionIn, SponsorIn
 from app.services import storage
 from app.services.geo import point_wkt
@@ -35,8 +35,14 @@ class GeoJsonAreaIn(BaseModel):
 
 @router.get("/review", response_model=list[MissionOut])
 async def pending_public(db: Db, admin: User = Depends(require_admin)):
+    """Public missions waiting for review, plus sponsored missions with 3+ reports."""
     rows = (
-        await db.execute(select(Mission).where(Mission.visibility == "public", Mission.review_status == "pending"))
+        await db.execute(
+            select(Mission).where(
+                Mission.visibility == "public",
+                (Mission.review_status == "pending") | ((Mission.sponsor_id.is_not(None)) & (Mission.report_count >= 3)),
+            )
+        )
     ).scalars().all()
     return [to_out(m, admin) for m in rows]
 
@@ -49,6 +55,7 @@ async def review(mission_id: int, body: ReviewIn, db: Db, admin: User = Depends(
     m.review_status = "approved" if body.approve else "rejected"
     if body.approve:
         m.report_count = 0
+        await db.execute(delete(MissionReport).where(MissionReport.mission_id == m.id))
     await db.commit()
     return to_out(m, admin)
 

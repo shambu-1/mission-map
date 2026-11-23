@@ -1,6 +1,7 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { errMsg, GameService } from '../core/game.service';
+import { LocationService } from '../core/location.service';
 import { Category, Story } from '../core/models';
 import { Place, PlacePickerComponent } from '../shared/place-picker.component';
 
@@ -17,7 +18,7 @@ interface ChapterDraft {
   template: `
     <div class="mx-auto max-w-xl p-4 pb-24">
       <h1 class="hud-font mb-1 text-3xl font-bold">Main story</h1>
-      <p class="mb-4 text-sm text-base-content/60">A big goal split into chapters. Chapter N+1 unlocks when you finish chapter N. 200 XP each.</p>
+      <p class="mb-4 text-sm text-base-content/60">A big goal split into up to 10 chapters at different places (200 m+ apart). Chapter N+1 unlocks when you finish chapter N. 200 XP each.</p>
 
       @if (!unlocked()) {
         <div class="alert">🔒 Main story missions unlock at level 3.</div>
@@ -92,6 +93,7 @@ interface ChapterDraft {
 })
 export class StoriesPage implements OnInit {
   private game = inject(GameService);
+  private location = inject(LocationService);
   protected stories = signal<Story[]>([]);
   protected busy = signal(false);
   protected error = signal<string | null>(null);
@@ -109,6 +111,7 @@ export class StoriesPage implements OnInit {
   }
 
   addChapter() {
+    if (this.chapters.length >= 10) return;
     this.chapters.push({ title: '', category: 'fitness', place: null, dwell_min: 0 });
     this.editing = this.chapters.length - 1;
   }
@@ -128,7 +131,7 @@ export class StoriesPage implements OnInit {
       lng: c.place?.lng ?? null,
       place_name: c.place?.name ?? null,
     }));
-    this.game.createStory(this.title, chapters).subscribe({
+    this.game.createStory(this.title, chapters, this.location.position()).subscribe({
       next: () => {
         this.busy.set(false);
         this.title = '';

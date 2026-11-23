@@ -37,6 +37,11 @@ class User(Base):
     is_premium: Mapped[bool] = mapped_column(default=False)
     is_admin: Mapped[bool] = mapped_column(default=False)
 
+    # Last accepted explore point (sanity-checks the next /explore batch)
+    last_explore_lat: Mapped[float | None] = mapped_column(nullable=True)
+    last_explore_lng: Mapped[float | None] = mapped_column(nullable=True)
+    last_explore_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Anti-cheat: XP frozen until reviewed
     xp_frozen: Mapped[bool] = mapped_column(default=False)
 

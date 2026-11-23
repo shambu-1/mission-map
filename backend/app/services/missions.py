@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Mission, RestrictedZone, User
 from app.schemas import MissionOut
-from app.services import progression
+from app.services import farming, progression
 from app.services.geo import latlng_of, point_wkt, view_url, waypoint_url
 
 ACTIVE_STATUSES = ("active", "in_progress")
@@ -38,6 +38,8 @@ def to_out(m: Mission, user: User | None = None, distance_m: float | None = None
         sponsored=m.sponsor_id is not None,
         squad_id=m.squad_id,
         has_proof=m.proof_key is not None,
+        has_note=bool(m.proof_note),
+        checkin_opens_at=farming.checkin_opens_at(m),
         dwell_started_at=m.dwell_started_at,
         distance_m=round(distance_m, 1) if distance_m is not None else None,
         waypoint_url=waypoint_url(lat, lng, mode) if lat is not None else None,

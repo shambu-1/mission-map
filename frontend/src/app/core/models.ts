@@ -53,7 +53,9 @@ export interface Mission {
   source: string;
   sponsored: boolean;
   squad_id: number | null;
-  has_proof: boolean;
+  has_proof: boolean; // photo attached
+  has_note: boolean;
+  checkin_opens_at: string | null;
   dwell_started_at: string | null;
   distance_m: number | null;
   waypoint_url: string | null;
@@ -74,6 +76,8 @@ export interface MissionInput {
   proof_required: boolean;
   deadline?: string | null;
   visibility?: 'private' | 'friends' | 'public';
+  origin_lat?: number | null;
+  origin_lng?: number | null;
 }
 
 export interface CheckinResult {

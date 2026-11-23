@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Completion, District, DistrictClaim, Mission, Sponsor, Story, User
-from app.services import progression
+from app.services import farming, progression
 from app.services.fog import cell_of, mark_explored
 from app.services.geo import point_wkt
 
@@ -25,6 +25,7 @@ class RewardResult:
     new_unlocks: list[dict] = field(default_factory=list)
     streak_days: int = 0
     district_claimed: str | None = None
+    note: str | None = None
 
 
 async def complete_mission(
@@ -66,6 +67,13 @@ async def complete_mission(
     xp = 0 if user.xp_frozen else breakdown.total
     cash = 0 if user.xp_frozen else progression.CASH_PER_MISSION.get(mission.type, 5)
 
+    # Anti-farming caps (only for missions the player made themselves)
+    allowance = await farming.allowed_xp(db, mission, user.id, xp, cell, now)
+    if allowance.allowed < xp:
+        cash = cash if allowance.allowed > 0 else 0
+        xp = allowance.allowed
+    counts = xp > 0 or breakdown.total == 0  # capped completions don't grow stats
+
     old_level = user.level
     user.xp += xp
     user.cash += cash
@@ -73,13 +81,28 @@ async def complete_mission(
 
     # Stats
     stat_attr = progression.CATEGORY_TO_STAT.get(mission.category)
-    if stat_attr:
+    if counts and stat_attr:
         setattr(user, stat_attr, getattr(user, stat_attr) + 1)
-    if first_cell and stat_attr != "stat_explorer":
+    if counts and first_cell and stat_attr != "stat_explorer":
         user.stat_explorer += 1
-    if mission.squad_id is not None and stat_attr != "stat_social":
+    if counts and mission.squad_id is not None and stat_attr != "stat_social":
         user.stat_social += 1
     user.stat_discipline = max(user.stat_discipline, user.streak_days)
+
+    # Sponsored missions are billed per completed check-in — once per player per sponsored mission
+    bill_sponsor = False
+    if mission.sponsor_id:
+        original = mission.source_mission_id or mission.id
+        already = await db.scalar(
+            select(Completion.id)
+            .join(Mission, Mission.id == Completion.mission_id)
+            .where(
+                Completion.user_id == user.id,
+                (Mission.source_mission_id == original) | (Mission.id == original),
+            )
+            .limit(1)
+        )
+        bill_sponsor = already is None
 
     db.add(
         Completion(
@@ -96,8 +119,7 @@ async def complete_mission(
         )
     )
 
-    # Sponsored missions are billed per completed check-in
-    if mission.sponsor_id:
+    if bill_sponsor:
         sponsor = await db.get(Sponsor, mission.sponsor_id)
         if sponsor:
             sponsor.billable_checkins += 1
@@ -114,26 +136,31 @@ async def complete_mission(
         new_unlocks=progression.new_unlocks_between(old_level, user.level),
         streak_days=user.streak_days,
         district_claimed=district_claimed,
+        note=allowance.note,
     )
 
 
-async def finish_mission_state(db: AsyncSession, mission: Mission) -> None:
+async def finish_mission_state(db: AsyncSession, mission: Mission, now: datetime | None = None) -> None:
     """Mark completed and, for main story chapters, unlock the next chapter."""
     mission.status = "completed"
     mission.dwell_started_at = None
     if mission.story_id is None or mission.chapter_no is None:
         return
+    story = await db.get(Story, mission.story_id)
+    if story is None or story.owner_id != mission.owner_id:
+        return  # only the story owner's own chapters can advance it
     next_chapter = await db.scalar(
         select(Mission).where(
-            Mission.story_id == mission.story_id, Mission.chapter_no == mission.chapter_no + 1
+            Mission.story_id == mission.story_id,
+            Mission.owner_id == mission.owner_id,
+            Mission.chapter_no == mission.chapter_no + 1,
         )
     )
     if next_chapter:
         next_chapter.status = "active"
+        next_chapter.activated_at = now or datetime.now(timezone.utc)
     else:
-        story = await db.get(Story, mission.story_id)
-        if story:
-            story.status = "completed"
+        story.status = "completed"
 
 
 async def _progress_district(db: AsyncSession, user_id: int, lat: float, lng: float, now: datetime) -> str | None:

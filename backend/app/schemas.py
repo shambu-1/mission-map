@@ -86,6 +86,9 @@ class MissionIn(BaseModel):
     chapter_no: int | None = Field(default=None, ge=1)
     visibility: Visibility = "private"
     verifier_id: int | None = None
+    # Where the player is right now (anti-farming: missions can't be placed at your feet)
+    origin_lat: float | None = Field(default=None, ge=-90, le=90)
+    origin_lng: float | None = Field(default=None, ge=-180, le=180)
 
     @field_validator("type")
     @classmethod
@@ -107,6 +110,8 @@ class MissionUpdate(BaseModel):
     proof_required: bool | None = None
     deadline: datetime | None = None
     visibility: Visibility | None = None
+    origin_lat: float | None = Field(default=None, ge=-90, le=90)
+    origin_lng: float | None = Field(default=None, ge=-180, le=180)
 
 
 class MissionOut(BaseModel):
@@ -132,7 +137,9 @@ class MissionOut(BaseModel):
     source: str
     sponsored: bool
     squad_id: int | None
-    has_proof: bool
+    has_proof: bool  # a photo is attached
+    has_note: bool
+    checkin_opens_at: datetime | None
     dwell_started_at: datetime | None
     distance_m: float | None = None
     waypoint_url: str | None = None
@@ -188,7 +195,9 @@ class ChapterIn(BaseModel):
 
 class StoryIn(BaseModel):
     title: str = Field(min_length=1, max_length=120)
-    chapters: list[ChapterIn] = Field(min_length=1, max_length=20)
+    chapters: list[ChapterIn] = Field(min_length=1, max_length=10)
+    origin_lat: float | None = Field(default=None, ge=-90, le=90)
+    origin_lng: float | None = Field(default=None, ge=-180, le=180)
 
 
 class StoryOut(BaseModel):

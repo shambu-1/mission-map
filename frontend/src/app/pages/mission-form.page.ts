@@ -2,6 +2,7 @@ import { Component, OnInit, computed, inject, input, signal } from '@angular/cor
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { errMsg, GameService } from '../core/game.service';
+import { LocationService } from '../core/location.service';
 import { Category, MissionInput, MissionType } from '../core/models';
 import { Place, PlacePickerComponent } from '../shared/place-picker.component';
 
@@ -62,7 +63,7 @@ import { Place, PlacePickerComponent } from '../shared/place-picker.component';
 
         <label class="label cursor-pointer justify-start gap-3">
           <input type="checkbox" class="toggle toggle-primary" name="proof" [(ngModel)]="form.proof_required" />
-          <span>Require photo or note as proof</span>
+          <span>Require a photo as proof (+10 XP)</span>
         </label>
 
         @if (form.type === 'timed' || form.deadline) {
@@ -97,6 +98,7 @@ export class MissionFormPage implements OnInit {
 
   protected game = inject(GameService);
   protected router = inject(Router);
+  private location = inject(LocationService);
   private route = inject(ActivatedRoute);
 
   protected busy = signal(false);
@@ -117,7 +119,7 @@ export class MissionFormPage implements OnInit {
   protected types: { value: MissionType; label: string; hint: string }[] = [
     { value: 'side', label: 'Side', hint: 'One-off task at a place — 50 XP.' },
     { value: 'timed', label: 'Timed', hint: 'Has a deadline — +50% XP if done in time.' },
-    { value: 'home', label: 'Home', hint: 'No location, self-confirmed — 15 XP.' },
+    { value: 'home', label: 'Home', hint: 'No location, self-confirmed — 15 XP (3 a day count).' },
   ];
 
   protected publicUnlocked = computed(() => this.game.me()?.unlocks?.['public_missions'] === 'true');
@@ -166,6 +168,9 @@ export class MissionFormPage implements OnInit {
       lng: this.form.type === 'home' ? null : this.place!.lng,
       place_name: this.form.type === 'home' ? null : this.place!.name,
       deadline: this.deadlineLocal ? new Date(this.deadlineLocal).toISOString() : null,
+      // Missions can't be placed where you're standing — the server checks this
+      origin_lat: this.location.position()?.lat ?? null,
+      origin_lng: this.location.position()?.lng ?? null,
     };
     this.busy.set(true);
     const id = this.id();

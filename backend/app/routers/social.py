@@ -9,8 +9,8 @@ from app.deps import CurrentUser, Db, require_unlock
 from app.models import Completion, Friendship, Mission, Squad, SquadMember, User
 from app.schemas import FriendOut, FriendRequestIn, MissionOut, SendMissionIn, SquadIn, SquadMissionIn, SquadOut
 from app.services import progression
-from app.services.missions import active_slots_used, ensure_safe_location, to_out
-from app.routers.missions import build_mission, friend_ids
+from app.services.missions import active_slots_used, to_out
+from app.routers.missions import build_mission, friend_ids, validate_assigned_mission
 
 router = APIRouter(tags=["social"])
 
@@ -132,10 +132,7 @@ async def send_mission(
     if friend_id not in await friend_ids(db, user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not a friend")
     friend = await db.get(User, friend_id)
-    if body.type not in ("side", "timed", "home"):
-        raise HTTPException(422, "You can send side, timed or home missions")
-    if body.lat is not None:
-        await ensure_safe_location(db, body.lat, body.lng)
+    body = await validate_assigned_mission(db, body, ("side", "timed", "home"))
     # Friends can't exceed the receiver's free slots (counting what's already in the inbox)
     pending = await db.scalar(
         select(func.count()).select_from(Mission).where(
@@ -145,7 +142,6 @@ async def send_mission(
     free = progression.slot_limit(friend.level, friend.is_premium) + friend.extra_slots - await active_slots_used(db, friend_id)
     if (pending or 0) >= free:
         raise HTTPException(status.HTTP_409_CONFLICT, f"{friend.username} has no free mission slots")
-    body.visibility = "private"
     m = build_mission(friend_id, body, source="friend", status="draft", assigned_by=user.id)
     db.add(m)
     await db.commit()
@@ -242,8 +238,7 @@ async def create_squad_mission(squad_id: int, body: SquadMissionIn, user: Curren
         raise HTTPException(422, "Co-op missions need a place")
     if body.deadline is None:
         raise HTTPException(422, "Co-op missions need a time window (deadline)")
-    await ensure_safe_location(db, body.lat, body.lng)
-    body.visibility = "private"
+    body = await validate_assigned_mission(db, body, ("side", "timed"))
     m = build_mission(user.id, body, source="squad", status="active", squad_id=squad_id)
     m.category = "social"
     db.add(m)

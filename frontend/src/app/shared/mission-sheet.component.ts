@@ -41,7 +41,10 @@ import { Mission, TYPE_ICON, TYPE_LABEL } from '../core/models';
           <span class="badge badge-ghost">⏳ stay {{ m.dwell_min }} min</span>
         }
         @if (m.proof_required) {
-          <span class="badge badge-ghost">📷 proof {{ m.has_proof ? '✓' : 'needed' }}</span>
+          <span class="badge badge-ghost">📷 photo {{ m.has_proof ? '✓' : 'needed' }}</span>
+        }
+        @if (opensIn(); as mins) {
+          <span class="badge badge-warning badge-outline">🔒 check-in opens in {{ mins }} min</span>
         }
         @if (m.deadline) {
           <span class="badge badge-error badge-outline">⏱ {{ m.deadline | date: 'EEE d MMM, HH:mm' }}</span>
@@ -69,7 +72,7 @@ import { Mission, TYPE_ICON, TYPE_LABEL } from '../core/models';
         }
         @if (isMine() || m.squad_id) {
           @if (m.status === 'active' || m.status === 'in_progress') {
-            <button class="btn btn-primary" [class.col-span-2]="!m.waypoint_url" [disabled]="busy() || location.drivingLock()" (click)="checkin()">
+            <button class="btn btn-primary" [class.col-span-2]="!m.waypoint_url" [disabled]="busy() || location.drivingLock() || !!opensIn()" (click)="checkin()">
               {{ m.lat === null ? 'Mark done' : 'Check in' }}
             </button>
           }
@@ -83,8 +86,8 @@ import { Mission, TYPE_ICON, TYPE_LABEL } from '../core/models';
           <summary class="collapse-title text-sm font-medium">Proof & more</summary>
           <div class="collapse-content flex flex-col gap-2">
             <input type="file" accept="image/jpeg,image/png,image/webp" class="file-input file-input-sm w-full" (change)="onFile($event)" />
-            <input class="input input-sm w-full" placeholder="Short note (optional)" [(ngModel)]="note" />
-            <button class="btn btn-sm" (click)="uploadProof()" [disabled]="busy() || (!file && !note)">Upload proof</button>
+            <input class="input input-sm w-full" placeholder="Short note (optional — only a photo counts as proof)" [(ngModel)]="note" />
+            <button class="btn btn-sm" (click)="uploadProof()" [disabled]="busy() || (!file && !note)">Save</button>
             @if (m.has_proof && m.lat !== null) {
               <button class="btn btn-sm btn-outline" (click)="checkin(true)" [disabled]="busy()">GPS weak? "I'm here" with proof</button>
             }
@@ -118,6 +121,14 @@ export class MissionSheetComponent {
   protected night = signal(isNight());
   protected file: File | null = null;
   protected note = '';
+
+  /** Minutes until check-in opens (new missions have a short wait), or null. */
+  protected opensIn = computed(() => {
+    const at = this.mission().checkin_opens_at;
+    if (!at) return null;
+    const mins = Math.ceil((new Date(at).getTime() - Date.now()) / 60000);
+    return mins > 0 ? mins : null;
+  });
 
   protected isMine = computed(() => this.mission().owner_id === this.game.me()?.id);
   protected distanceText = computed(() => {
@@ -173,7 +184,7 @@ export class MissionSheetComponent {
     this.game.uploadProof(this.mission().id, this.file, this.note || null).subscribe({
       next: () => {
         this.busy.set(false);
-        this.show('Proof saved (photo location data stripped).', 'info');
+        this.show(this.file ? 'Photo saved (location data stripped).' : 'Note saved.', 'info');
         this.changed.emit();
       },
       error: (e) => {

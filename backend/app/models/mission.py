@@ -57,10 +57,18 @@ class Mission(Base):
     review_status: Mapped[str] = mapped_column(String(10), default="approved")  # public missions: pending/approved/rejected
     report_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    # When the mission became checkable (creation, inbox accept, or previous chapter done)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Copy of a public/sponsored mission → the original
+    source_mission_id: Mapped[int | None] = mapped_column(
+        ForeignKey("missions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     # Dwell tracking
     dwell_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # Proof uploaded before check-in (storage key), used for proof_required missions
+    # Proof uploaded before check-in. proof_key is a photo (storage key) — only a photo
+    # satisfies proof_required and earns the proof bonus; proof_note is an optional text note.
     proof_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     proof_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -103,3 +111,14 @@ class CheckinAttempt(Base):
     result: Mapped[str] = mapped_column(String(16))  # accepted / in_progress / rejected / flagged
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class MissionReport(Base):
+    """One report per user per public mission."""
+
+    __tablename__ = "mission_reports"
+
+    mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -201,15 +201,41 @@ Restricted zones (railway tracks, military areas, water bodies) use `/admin/rest
 **Safety, privacy, anti-cheat**
 - Foreground-only location, batched every 2 min; no background tracking
 - Map and check-in lock above 20 km/h; night-time warning for public missions (22:00–06:00)
+- All check-in timing uses the **server clock**; phone timestamps more than 60 s off are rejected
 - Impossible travel (> 250 km/h between accepted points), 0 m accuracy or repeated identical coordinates are flagged; 3 flags in a week freeze XP until an admin reviews
-- Rate limits on auth, check-in (30/hour) and link import; SSRF allow-list for Google redirects
+- Manual "I'm here" (weak GPS) needs a **photo**, must be within 300 m and still runs dwell time; a text note never counts as proof
+- Rate limits on auth, check-in (30/hour), link import and explore — per user when signed in, per IP otherwise; SSRF allow-list for Google redirects
 - Account deletion removes all location rows and photos (DPDP Act 2023)
+
+**Anti-farming (missions you make yourself)**
+
+| Rule | Default (`backend/app/config.py`, overridable via env) |
+|---|---|
+| New missions must be away from where you are | 200 m (`MIN_MISSION_DISTANCE_M`) — checked against the phone's position and your last check-in |
+| Wait before check-in opens (after create, accept, move, or chapter unlock) | 30 min (`MIN_MINUTES_BEFORE_CHECKIN`) |
+| Daily XP cap from your own missions | 500 XP (`DAILY_SELF_XP_CAP`) |
+| Home missions that earn XP per day | 3 (`DAILY_HOME_MISSIONS`) |
+| No XP for another own mission in the same hex | 24 h (`SAME_CELL_COOLDOWN_H`) |
+| Story chapters | max 10, places at least 200 m apart |
+| Fog of war | max 300 new hexes a day; points must be recent, accurate (≤ 100 m) and reachable at a realistic speed |
+
+Capped completions still complete the mission (and keep your streak) but give no XP or stats. Daily events and sponsored missions aren't capped.
+
+**Moderation and billing**
+- One report per player per public mission; reports from 3 different players hide it until an admin re-approves. Sponsored missions stay visible and go to admin review instead
+- A public or sponsored mission can be taken once per player; the sponsor is billed once per player
+- Missions sent to friends or squads go through the same validation (no story/chapter/verifier links, no past deadlines)
+
+**Deployment safety**
+- `ENVIRONMENT=production` refuses to start unless `JWT_SECRET` is a random string of 32+ characters
+- The nightly job (expire missions, streaks, slacker stars) records each day in `job_runs`, so restarts or several API instances never run it twice
+- Behind a host's proxy, run uvicorn with `--proxy-headers` and set `FORWARDED_ALLOW_IPS` to the proxy (the Docker image does this); with more than one API instance set `RATE_LIMIT_STORAGE_URI=redis://...`
 
 ## Not done yet
 
 - Capacitor Android/iOS wrapper (needed for `isFromMockProvider` mock-location checks and push notifications)
 - Payments for Premium and sponsor billing (counts are tracked; no payment provider is wired up)
-- Alembic migrations, Redis-backed rate limiter for multiple API instances
+- Alembic migrations (after pulling a change that adds tables or columns, recreate the dev database — see Troubleshooting)
 - Seeding districts from real ward boundaries and restricted zones from OSM (admin endpoints accept GeoJSON)
 - PWA icons are the Angular defaults
 

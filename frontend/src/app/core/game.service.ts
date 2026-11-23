@@ -99,8 +99,8 @@ export class GameService {
   stories() {
     return this.http.get<Story[]>(`${API}/stories`);
   }
-  createStory(title: string, chapters: Partial<MissionInput>[]) {
-    return this.http.post<Story>(`${API}/stories`, { title, chapters });
+  createStory(title: string, chapters: Partial<MissionInput>[], origin?: { lat: number; lng: number } | null) {
+    return this.http.post<Story>(`${API}/stories`, { title, chapters, origin_lat: origin?.lat, origin_lng: origin?.lng });
   }
   daily(lat: number, lng: number) {
     return this.http.get<Mission[]>(`${API}/daily`, { params: { lat, lng } });

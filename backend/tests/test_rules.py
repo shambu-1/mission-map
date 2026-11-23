@@ -112,3 +112,51 @@ def test_suspicious_accuracy():
     recent = [PrevPoint(1.5, 2.5, t), PrevPoint(1.5, 2.5, t)]
     assert suspicious_accuracy(10, recent, 1.5, 2.5)
     assert suspicious_accuracy(10, recent, 1.6, 2.5) is None
+
+
+# ---------- fix 8: deployment safety ----------
+def test_production_requires_strong_secret():
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(environment="production", jwt_secret="short")
+    with pytest.raises(ValidationError):
+        Settings(environment="production")  # default dev secret
+    assert Settings(environment="production", jwt_secret="x" * 40).jwt_secret == "x" * 40
+    assert Settings(environment="development").environment == "development"
+
+
+def test_rate_limit_key_is_per_user():
+    from starlette.requests import Request
+
+    from app.limiter import user_or_ip
+    from app.security import create_access_token
+
+    def req(headers):
+        return Request({"type": "http", "headers": headers, "client": ("10.0.0.1", 1234)})
+
+    token = create_access_token(42)
+    assert user_or_ip(req([(b"authorization", f"Bearer {token}".encode())])) == "user:42"
+    assert user_or_ip(req([])) == "ip:10.0.0.1"
+    assert user_or_ip(req([(b"authorization", b"Bearer garbage")])) == "ip:10.0.0.1"
+
+
+# ---------- fix 6: explore point sanitising ----------
+def test_sanitize_points():
+    from app.services.fog import ExplorePoint, sanitize_points
+
+    now = datetime(2026, 11, 23, 12, tzinfo=timezone.utc)
+    pts = [
+        ExplorePoint(12.97, 77.59, now - timedelta(minutes=4)),
+        ExplorePoint(12.975, 77.59, now - timedelta(minutes=2)),  # 550 m in 2 min: ok
+        ExplorePoint(28.61, 77.20, now - timedelta(minutes=1)),  # Delhi: impossible
+        ExplorePoint(12.97, 77.59, now - timedelta(hours=3)),  # too old
+        ExplorePoint(12.97, 77.59, now + timedelta(hours=1)),  # future
+    ]
+    kept = sanitize_points(pts, None, now)
+    assert [(p.lat, p.lng) for p in kept] == [(12.97, 77.59), (12.975, 77.59)]
+    # A previous point far away makes the batch's first point impossible
+    last = ExplorePoint(9.49, 76.33, now - timedelta(minutes=10))
+    assert sanitize_points(pts[:1], last, now) == []

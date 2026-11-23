@@ -243,12 +243,25 @@ export class MapPage implements OnDestroy {
     return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((n) => n.toFixed(5)).join(',');
   }
 
+  /** Visible area, clamped around the centre to the API's max size (0.5° per side). */
+  private exploredBbox(): string | null {
+    if (!this.map) return null;
+    const b = this.map.getBounds();
+    const c = this.map.getCenter();
+    const half = 0.24;
+    const w = Math.max(b.getWest(), c.lng - half);
+    const e = Math.min(b.getEast(), c.lng + half);
+    const s = Math.max(b.getSouth(), c.lat - half);
+    const n = Math.min(b.getNorth(), c.lat + half);
+    return [w, s, e, n].map((v) => v.toFixed(5)).join(',');
+  }
+
   private refreshOverlays() {
     const bbox = this.bboxString();
     if (!bbox || !this.styleReady()) return;
     const b = this.map!.getBounds();
     if (this.showFog() && this.map!.getZoom() >= 11) {
-      this.game.explored(bbox).subscribe((fc) => {
+      this.game.explored(this.exploredBbox()!).subscribe((fc) => {
         (this.map?.getSource('fog') as GeoJSONSource | undefined)?.setData(
           fogPolygon([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], fc),
         );
